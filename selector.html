@@ -119,8 +119,8 @@
 
       // サイズ表示更新
       if (sizeIndicator) {
-        sizeIndicator.textContent = `${width} × ${height} px`;
-        sizeIndicator.style.left = (x + width / 2 - 50) + 'px';
+        sizeIndicator.textContent = `位置: (${x}, ${y}) | サイズ: ${width} × ${height} px`;
+        sizeIndicator.style.left = (x + width / 2 - 120) + 'px';
         sizeIndicator.style.top = (y - 30) + 'px';
       }
     });

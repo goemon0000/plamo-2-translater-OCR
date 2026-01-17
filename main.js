@@ -1,9 +1,8 @@
 const { app, BrowserWindow, ipcMain, screen, globalShortcut } = require('electron');
 const screenshot = require('screenshot-desktop');
-const { createWorker } = require('tesseract.js');
-const sharp = require('sharp');
+const { fork } = require('child_process');
 const path = require('path');
-const fetch = require('node-fetch');
+const { net } = require('electron');
 
 let mainWindow;
 let overlayWindow;
@@ -13,19 +12,7 @@ let previousTexts = {};
 let isCapturing = false;
 let captureInterval = null;
 let isProcessing = false; // 処理中フラグ
-const TESSERACT_WORKER_RELATIVE_PATH = path.join('node_modules', 'tesseract.js', 'dist', 'worker.min.js');
-const TESSERACT_CORE_RELATIVE_PATH = path.join('node_modules', 'tesseract.js-core', 'tesseract-core.wasm.js');
-let ocrWorker = null;
-let ocrWorkerReady = false;
-
-function getTesseractPaths() {
-  const appPath = app && typeof app.getAppPath === 'function' ? app.getAppPath() : __dirname;
-  const workerPath = path.join(appPath, TESSERACT_WORKER_RELATIVE_PATH);
-  const corePath = path.join(appPath, TESSERACT_CORE_RELATIVE_PATH);
-  const langPath = appPath;
-
-  return { workerPath, corePath, langPath };
-}
+let ocrWorker = null; // OCRワーカープロセス
 
 function createMainWindow() {
   mainWindow = new BrowserWindow({
@@ -91,7 +78,8 @@ function createSelectorWindow() {
     skipTaskbar: false,
     webPreferences: {
       nodeIntegration: true,
-      contextIsolation: false
+      contextIsolation: false,
+      enableRemoteModule: true
     },
     focusable: true,
     hasShadow: false,
@@ -111,6 +99,9 @@ app.whenReady().then(() => {
   createMainWindow();
   createOverlayWindow();
   createSelectorWindow();
+  
+  // OCRワーカーを起動
+  startOCRWorker();
 
   // ショートカット登録
   globalShortcut.register('CommandOrControl+Shift+S', () => {
@@ -127,15 +118,41 @@ app.whenReady().then(() => {
       clearInterval(captureInterval);
       captureInterval = null;
     }
+    if (ocrWorker) {
+      ocrWorker.kill();
+    }
     app.exit(0);
   });
 
   console.log('アプリケーション起動完了');
 });
 
+function startOCRWorker() {
+  const workerPath = path.join(__dirname, 'ocr-worker.js');
+  ocrWorker = fork(workerPath);
+  
+  ocrWorker.on('error', (err) => {
+    console.error('[OCR Worker] エラー:', err);
+  });
+  
+  ocrWorker.on('exit', (code) => {
+    console.log(`[OCR Worker] 終了 (コード: ${code})`);
+    // 異常終了した場合は再起動
+    if (code !== 0 && isCapturing) {
+      console.log('[OCR Worker] 再起動します...');
+      setTimeout(() => startOCRWorker(), 1000);
+    }
+  });
+  
+  console.log('[OCR Worker] 起動しました');
+}
+
 app.on('window-all-closed', () => {
   if (captureInterval) {
     clearInterval(captureInterval);
+  }
+  if (ocrWorker) {
+    ocrWorker.kill();
   }
   globalShortcut.unregisterAll();
   app.quit();
@@ -143,9 +160,6 @@ app.on('window-all-closed', () => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
-  if (ocrWorker) {
-    ocrWorker.terminate();
-  }
 });
 
 // 領域選択開始
@@ -166,8 +180,18 @@ ipcMain.on('region-selected', (event, region) => {
     selectorWindow.hide();
   }
   
+  // DPIスケーリング係数を取得
+  const display = screen.getPrimaryDisplay();
+  const scaleFactor = display.scaleFactor || 1;
+  
+  console.log(`[DPI] スケール係数: ${scaleFactor}`);
+  
+  // 物理ピクセル座標に変換
   const newRegion = {
-    ...region,
+    x: Math.round(region.x * scaleFactor),
+    y: Math.round(region.y * scaleFactor),
+    width: Math.round(region.width * scaleFactor),
+    height: Math.round(region.height * scaleFactor),
     id: Date.now()
   };
   captureRegions.push(newRegion);
@@ -295,8 +319,12 @@ async function captureAndTranslate(region) {
       return;
     }
 
+    // 正規化：空白を統一して比較
+    const normalizedText = text.trim().replace(/\s+/g, ' ');
+    const previousNormalized = previousTexts[region.id] ? previousTexts[region.id].replace(/\s+/g, ' ') : '';
+    
     // 前回と同じなら無視
-    if (previousTexts[region.id] === text) {
+    if (previousNormalized === normalizedText) {
       return;
     }
     
@@ -325,123 +353,132 @@ async function captureAndTranslate(region) {
 }
 
 async function performOCR(imageBuffer, region) {
-  try {
-    console.log(`[OCR] 領域サイズ: ${region.width}x${region.height}px`);
-    
-    const baseImage = sharp(imageBuffer).extract({
-      left: region.x,
-      top: region.y,
-      width: region.width,
-      height: region.height
-    });
-    
-    const stats = await baseImage.clone().greyscale().stats();
-    const meanLuma = stats.channels[0].mean;
-    
-    // sharpで領域を切り出し + 前処理
-    let pipeline = baseImage
-      // 画像を3倍に拡大（OCR精度向上）
-      .resize(region.width * 3, region.height * 3, {
-        kernel: 'lanczos3'
-      })
-      // グレースケール化
-      .greyscale()
-      // コントラスト強化
-      .normalize();
-
-    // 背景が暗い場合は反転して黒文字/白背景に寄せる
-    if (meanLuma < 128) {
-      pipeline = pipeline.negate();
+  return new Promise((resolve, reject) => {
+    if (!ocrWorker) {
+      console.error('[OCR] ワーカーが起動していません');
+      resolve('');
+      return;
     }
-
-    // 二値化で文字エッジを強調
-    const croppedBuffer = await pipeline
-      .threshold(170)
-      // シャープネス
-      .sharpen()
-      .toBuffer();
-
-    const worker = await getOcrWorker();
     
-    // OCR実行（英語のみで読み取り）
-    const { data: { text } } = await worker.recognize(croppedBuffer);
+    const timeout = setTimeout(() => {
+      console.error('[OCR] タイムアウト');
+      resolve('');
+    }, 10000); // 10秒タイムアウト
     
-    const cleanedText = text.trim();
-    console.log(`[OCR] 読取結果（英語）: "${cleanedText.substring(0, 100)}"`);
-    return cleanedText;
-  } catch (err) {
-    console.error('OCRエラー:', err.message);
-    return '';
-  }
-}
-
-async function getOcrWorker() {
-  if (!ocrWorker) {
-    const { workerPath, corePath, langPath } = getTesseractPaths();
-    ocrWorker = createWorker({
-      workerPath,
-      corePath,
-      langPath,
-      cachePath: path.join(app.getPath('userData'), 'tesseract-cache')
+    const messageHandler = (msg) => {
+      if (msg.type === 'result') {
+        clearTimeout(timeout);
+        ocrWorker.removeListener('message', messageHandler);
+        resolve(msg.text);
+      } else if (msg.type === 'error') {
+        clearTimeout(timeout);
+        ocrWorker.removeListener('message', messageHandler);
+        console.error('[OCR] エラー:', msg.error);
+        resolve('');
+      }
+    };
+    
+    ocrWorker.on('message', messageHandler);
+    
+    // 画像バッファを配列に変換して送信
+    ocrWorker.send({
+      type: 'ocr',
+      imageBuffer: Array.from(imageBuffer),
+      region: region
     });
-  }
-
-  if (!ocrWorkerReady) {
-    await ocrWorker.load();
-    await ocrWorker.loadLanguage('eng');
-    await ocrWorker.initialize('eng');
-    await ocrWorker.setParameters({
-      tessedit_pageseg_mode: '6',
-      tessedit_ocr_engine_mode: '1',
-      user_defined_dpi: '300',
-      preserve_interword_spaces: '1'
-    });
-    ocrWorkerReady = true;
-  }
-
-  return ocrWorker;
+  });
 }
 
 async function translateText(text) {
   const apiUrl = 'http://127.0.0.1:1234/v1/chat/completions';
   
-  try {
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        // モデル名はLM Studioで表示されている名前に合わせてください
-        model: 'plamo-2-translate',
-        messages: [
-          {
-            role: 'user',
-            content: `次の英語を日本語に翻訳してください。翻訳結果のみを出力してください:\n\n${text}`
-          }
-        ],
-        max_tokens: 500,
-        temperature: 0.3
-      }),
-      timeout: 30000 // 30秒タイムアウト
+  return new Promise((resolve, reject) => {
+    const requestData = JSON.stringify({
+      model: 'plamo-2-translate',
+      messages: [
+        {
+          role: 'system',
+          content: 'あなたはプロの翻訳者です。英語のテキストを自然な日本語に翻訳してください。翻訳結果のみを出力し、余計な説明や装飾（テーブル形式、箇条書きなど）は付けないでください。'
+        },
+        {
+          role: 'user',
+          content: text
+        }
+      ],
+      max_tokens: 300,
+      temperature: 0.3
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`HTTP ${response.status}: ${errorText}`);
-    }
+    const request = net.request({
+      method: 'POST',
+      protocol: 'http:',
+      hostname: '127.0.0.1',
+      port: 1234,
+      path: '/v1/chat/completions'
+    });
 
-    const data = await response.json();
-    
-    if (!data.choices || !data.choices[0]) {
-      throw new Error('APIレスポンスが不正です');
+    request.setHeader('Content-Type', 'application/json');
+
+    let responseData = '';
+    let timeoutId = null;
+
+    // タイムアウト処理（30秒）
+    timeoutId = setTimeout(() => {
+      request.abort();
+      console.error('[翻訳エラー] タイムアウト');
+      resolve(`[翻訳失敗] ${text}`);
+    }, 30000);
+
+    request.on('response', (response) => {
+      response.on('data', (chunk) => {
+        responseData += chunk.toString();
+      });
+
+      response.on('end', () => {
+        clearTimeout(timeoutId);
+        
+        try {
+          if (response.statusCode !== 200) {
+            throw new Error(`HTTP ${response.statusCode}: ${responseData}`);
+          }
+
+          const data = JSON.parse(responseData);
+          
+          if (!data.choices || !data.choices[0]) {
+            throw new Error('APIレスポンスが不正です');
+          }
+          
+          resolve(data.choices[0].message.content.trim());
+        } catch (err) {
+          console.error('[翻訳エラー]', err.message);
+          resolve(`[翻訳失敗] ${text}`);
+        }
+      });
+
+      response.on('error', (err) => {
+        clearTimeout(timeoutId);
+        console.error('[翻訳エラー] レスポンスエラー:', err.message);
+        resolve(`[翻訳失敗] ${text}`);
+      });
+    });
+
+    request.on('error', (err) => {
+      clearTimeout(timeoutId);
+      if (err.message.includes('ECONNREFUSED')) {
+        console.error('[翻訳エラー] LM Studioサーバーに接続できません。ポート1234が開いているか確認してください。');
+      } else {
+        console.error('[翻訳エラー] リクエストエラー:', err.message);
+      }
+      resolve(`[翻訳失敗] ${text}`);
+    });
+
+    try {
+      request.write(requestData);
+      request.end();
+    } catch (err) {
+      clearTimeout(timeoutId);
+      console.error('[翻訳エラー] リクエスト送信エラー:', err.message);
+      resolve(`[翻訳失敗] ${text}`);
     }
-    
-    return data.choices[0].message.content.trim();
-  } catch (err) {
-    if (err.code === 'ECONNREFUSED') {
-      console.error('[翻訳エラー] LM Studioサーバーに接続できません。');
-    } else {
-      console.error('[翻訳エラー]', err.message);
-    }
-    return `[翻訳失敗] ${text}`;
-  }
+  });
 }

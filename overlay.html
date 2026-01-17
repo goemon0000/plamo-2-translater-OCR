@@ -14,38 +14,81 @@
       width: 100vw;
       height: 100vh;
     }
-    .translation-box {
-      position: absolute;
-      background: linear-gradient(135deg, rgba(0, 0, 0, 0.9) 0%, rgba(20, 20, 20, 0.9) 100%);
-      color: #fff;
-      padding: 10px 15px;
-      border-radius: 8px;
-      font-family: 'Segoe UI', 'Yu Gothic', 'Meiryo', sans-serif;
-      font-size: 18px;
-      line-height: 1.5;
-      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.7);
-      border: 2px solid #4CAF50;
-      max-width: 500px;
-      word-wrap: break-word;
-      pointer-events: none;
-      animation: fadeIn 0.3s ease-out;
-      backdrop-filter: blur(5px);
-    }
+    
+    /* 選択領域の枠線 */
     .region-indicator {
       position: absolute;
-      border: 3px dashed rgba(76, 175, 80, 0.7);
-      background: rgba(76, 175, 80, 0.08);
+      border: 2px solid rgba(76, 175, 80, 0.6);
+      background: rgba(76, 175, 80, 0.05);
       pointer-events: none;
-      box-shadow: 0 0 10px rgba(76, 175, 80, 0.5);
+      box-shadow: 0 0 15px rgba(76, 175, 80, 0.4);
+      animation: pulse 2s ease-in-out infinite;
     }
+    
+    @keyframes pulse {
+      0%, 100% {
+        border-color: rgba(76, 175, 80, 0.6);
+        box-shadow: 0 0 15px rgba(76, 175, 80, 0.4);
+      }
+      50% {
+        border-color: rgba(76, 175, 80, 0.9);
+        box-shadow: 0 0 25px rgba(76, 175, 80, 0.6);
+      }
+    }
+    
+    /* 翻訳テキストボックス（領域内に表示） */
+    .translation-box {
+      position: absolute;
+      background: linear-gradient(135deg, rgba(0, 0, 0, 0.95) 0%, rgba(20, 20, 30, 0.95) 100%);
+      color: #ffffff;
+      padding: 12px 16px;
+      font-family: 'Yu Gothic UI', 'Meiryo UI', 'Segoe UI', sans-serif;
+      font-size: 18px;
+      line-height: 1.6;
+      border: 2px solid #4CAF50;
+      border-radius: 6px;
+      box-shadow: 
+        0 8px 24px rgba(0, 0, 0, 0.8),
+        inset 0 1px 0 rgba(255, 255, 255, 0.1);
+      pointer-events: none;
+      animation: fadeIn 0.3s ease-out;
+      backdrop-filter: blur(8px);
+      word-wrap: break-word;
+      white-space: pre-wrap;
+      /* 最大幅を制限 */
+      max-width: 800px;
+    }
+    
+    /* 小さい領域用の調整 */
+    .translation-box.compact {
+      font-size: 14px;
+      padding: 8px 12px;
+    }
+    
     @keyframes fadeIn {
       from {
         opacity: 0;
-        transform: translateY(-10px);
+        transform: scale(0.95);
       }
       to {
         opacity: 1;
-        transform: translateY(0);
+        transform: scale(1);
+      }
+    }
+    
+    /* 新しいテキストが表示されたときのハイライト */
+    .translation-box.updated {
+      animation: highlight 0.5s ease-out;
+    }
+    
+    @keyframes highlight {
+      0% {
+        border-color: #FFD700;
+        box-shadow: 0 0 30px rgba(255, 215, 0, 0.8);
+      }
+      100% {
+        border-color: #4CAF50;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.8);
       }
     }
   </style>
@@ -79,18 +122,67 @@
       
       if (box) {
         // 既存のボックスを更新
+        const isNewText = box.textContent !== data.text;
         box.textContent = data.text;
+        
+        if (isNewText) {
+          // 新しいテキストの場合、ハイライトアニメーション
+          box.classList.add('updated');
+          setTimeout(() => box.classList.remove('updated'), 500);
+        }
       } else {
         // 新しいボックスを作成
         box = document.createElement('div');
         box.id = `trans-${data.id}`;
         box.className = 'translation-box';
-        box.style.left = data.x + 'px';
-        box.style.top = (data.y + data.height + 10) + 'px';
+        
+        // 領域のサイズに応じてフォントサイズを調整
+        if (data.width < 400 || data.height < 80) {
+          box.classList.add('compact');
+        }
+        
+        // 位置を計算（領域の中央に配置）
+        positionTranslationBox(box, data);
+        
         box.textContent = data.text;
         container.appendChild(box);
       }
     });
+
+    function positionTranslationBox(box, data) {
+      // まずボックスを一時的に表示して、サイズを取得
+      box.style.visibility = 'hidden';
+      box.style.position = 'absolute';
+      box.textContent = data.text;
+      container.appendChild(box);
+      
+      const boxWidth = box.offsetWidth;
+      const boxHeight = box.offsetHeight;
+      
+      // 領域の中央に配置
+      let left = data.x + (data.width - boxWidth) / 2;
+      let top = data.y + (data.height - boxHeight) / 2;
+      
+      // 画面外に出ないように調整
+      const screenWidth = window.innerWidth;
+      const screenHeight = window.innerHeight;
+      
+      if (left < 10) left = 10;
+      if (left + boxWidth > screenWidth - 10) left = screenWidth - boxWidth - 10;
+      if (top < 10) top = 10;
+      if (top + boxHeight > screenHeight - 10) {
+        // 下に配置できない場合は上に配置
+        top = data.y - boxHeight - 10;
+        if (top < 10) {
+          // 上にも配置できない場合は領域の下に配置
+          top = data.y + data.height + 10;
+        }
+      }
+      
+      box.style.left = left + 'px';
+      box.style.top = top + 'px';
+      box.style.visibility = 'visible';
+    }
 
     ipcRenderer.on('remove-translation', (event, id) => {
       const box = document.getElementById(`trans-${id}`);
