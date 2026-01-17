@@ -3,6 +3,7 @@ const screenshot = require('screenshot-desktop');
 const Tesseract = require('tesseract.js');
 const sharp = require('sharp');
 const path = require('path');
+const { pathToFileURL } = require('url');
 const fetch = require('node-fetch');
 
 let mainWindow;
@@ -346,7 +347,7 @@ async function performOCR(imageBuffer, region) {
         // OCRエンジンモード: LSTM
         oem: 1,
         // 言語データのパス（ローカル優先）
-        langPath: path.join(__dirname),
+        langPath: pathToFileURL(`${__dirname}${path.sep}`).href,
         // キャッシュを有効化
         cachePath: './.cache',
         // DPIを明示して精度を安定化
