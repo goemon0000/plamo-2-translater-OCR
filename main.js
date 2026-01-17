@@ -1,9 +1,8 @@
 const { app, BrowserWindow, ipcMain, screen, globalShortcut } = require('electron');
 const screenshot = require('screenshot-desktop');
-const Tesseract = require('tesseract.js');
+const { createWorker } = require('tesseract.js');
 const sharp = require('sharp');
 const path = require('path');
-const { pathToFileURL } = require('url');
 const fetch = require('node-fetch');
 
 let mainWindow;
@@ -16,12 +15,14 @@ let captureInterval = null;
 let isProcessing = false; // 処理中フラグ
 const TESSERACT_WORKER_RELATIVE_PATH = path.join('node_modules', 'tesseract.js', 'dist', 'worker.min.js');
 const TESSERACT_CORE_RELATIVE_PATH = path.join('node_modules', 'tesseract.js-core', 'tesseract-core.wasm.js');
+let ocrWorker = null;
+let ocrWorkerReady = false;
 
 function getTesseractPaths() {
   const appPath = app && typeof app.getAppPath === 'function' ? app.getAppPath() : __dirname;
-  const workerPath = new URL(pathToFileURL(path.join(appPath, TESSERACT_WORKER_RELATIVE_PATH)).href);
-  const corePath = new URL(pathToFileURL(path.join(appPath, TESSERACT_CORE_RELATIVE_PATH)).href);
-  const langPath = new URL(pathToFileURL(`${appPath}${path.sep}`).href);
+  const workerPath = path.join(appPath, TESSERACT_WORKER_RELATIVE_PATH);
+  const corePath = path.join(appPath, TESSERACT_CORE_RELATIVE_PATH);
+  const langPath = appPath;
 
   return { workerPath, corePath, langPath };
 }
@@ -142,6 +143,9 @@ app.on('window-all-closed', () => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
+  if (ocrWorker) {
+    ocrWorker.terminate();
+  }
 });
 
 // 領域選択開始
@@ -357,30 +361,10 @@ async function performOCR(imageBuffer, region) {
       .sharpen()
       .toBuffer();
 
-    const { workerPath, corePath, langPath } = getTesseractPaths();
+    const worker = await getOcrWorker();
     
     // OCR実行（英語のみで読み取り）
-    const { data: { text } } = await Tesseract.recognize(
-      croppedBuffer, 
-      'eng', // 英語のみ
-      {
-        // PSMモード6: 複数行対応
-        psm: 6,
-        // OCRエンジンモード: LSTM
-        oem: 1,
-        // 言語データのパス（ローカル優先）
-        langPath,
-        // ローカルのTesseractワーカー/コアを明示
-        workerPath,
-        corePath,
-        // キャッシュを有効化
-        cachePath: './.cache',
-        // DPIを明示して精度を安定化
-        user_defined_dpi: '300',
-        // 空白保持
-        preserve_interword_spaces: '1'
-      }
-    );
+    const { data: { text } } = await worker.recognize(croppedBuffer);
     
     const cleanedText = text.trim();
     console.log(`[OCR] 読取結果（英語）: "${cleanedText.substring(0, 100)}"`);
@@ -389,6 +373,33 @@ async function performOCR(imageBuffer, region) {
     console.error('OCRエラー:', err.message);
     return '';
   }
+}
+
+async function getOcrWorker() {
+  if (!ocrWorker) {
+    const { workerPath, corePath, langPath } = getTesseractPaths();
+    ocrWorker = createWorker({
+      workerPath,
+      corePath,
+      langPath,
+      cachePath: path.join(app.getPath('userData'), 'tesseract-cache')
+    });
+  }
+
+  if (!ocrWorkerReady) {
+    await ocrWorker.load();
+    await ocrWorker.loadLanguage('eng');
+    await ocrWorker.initialize('eng');
+    await ocrWorker.setParameters({
+      tessedit_pageseg_mode: '6',
+      tessedit_ocr_engine_mode: '1',
+      user_defined_dpi: '300',
+      preserve_interword_spaces: '1'
+    });
+    ocrWorkerReady = true;
+  }
+
+  return ocrWorker;
 }
 
 async function translateText(text) {
