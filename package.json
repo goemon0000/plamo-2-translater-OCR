@@ -1,0 +1,19 @@
+{
+  "name": "game-translator",
+  "version": "1.0.0",
+  "description": "",
+  "main": "main.js",
+  "scripts": {
+    "start": "chcp 65001 && electron ."
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "electron": "^28.1.0",
+    "node-fetch": "^2.7.0",
+    "screenshot-desktop": "^1.15.0",
+    "sharp": "^0.33.1",
+    "tesseract.js": "^5.0.4"
+  }
+}

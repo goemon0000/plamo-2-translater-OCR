@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      cursor: crosshair;
+    }
+    body {
+      overflow: hidden;
+      background: rgba(0, 0, 0, 0.3);
+      width: 100vw;
+      height: 100vh;
+      position: relative;
+    }
+    .instructions {
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.9);
+      color: white;
+      padding: 15px 30px;
+      border-radius: 10px;
+      font-family: 'Segoe UI', sans-serif;
+      font-size: 18px;
+      text-align: center;
+      z-index: 1000;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+      border: 2px solid #4CAF50;
+    }
+    .selection-box {
+      position: absolute;
+      border: 3px solid #4CAF50;
+      background: rgba(76, 175, 80, 0.2);
+      box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
+      pointer-events: none;
+    }
+    .size-indicator {
+      position: absolute;
+      background: rgba(0, 0, 0, 0.9);
+      color: #4CAF50;
+      padding: 5px 10px;
+      border-radius: 5px;
+      font-family: 'Courier New', monospace;
+      font-size: 14px;
+      pointer-events: none;
+      border: 1px solid #4CAF50;
+    }
+    .cancel-hint {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.8);
+      color: white;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-family: 'Segoe UI', sans-serif;
+      font-size: 14px;
+      z-index: 1000;
+    }
+  </style>
+</head>
+<body>
+  <div class="instructions">
+    🖱️ ドラッグして翻訳する領域を選択してください
+  </div>
+  
+  <div class="cancel-hint">
+    ESCキーでキャンセル
+  </div>
+
+  <script>
+    const { ipcRenderer } = require('electron');
+    
+    let isSelecting = false;
+    let startX = 0;
+    let startY = 0;
+    let selectionBox = null;
+    let sizeIndicator = null;
+
+    document.addEventListener('mousedown', (e) => {
+      isSelecting = true;
+      startX = e.clientX;
+      startY = e.clientY;
+
+      // 選択ボックス作成
+      selectionBox = document.createElement('div');
+      selectionBox.className = 'selection-box';
+      selectionBox.style.left = startX + 'px';
+      selectionBox.style.top = startY + 'px';
+      document.body.appendChild(selectionBox);
+
+      // サイズ表示作成
+      sizeIndicator = document.createElement('div');
+      sizeIndicator.className = 'size-indicator';
+      document.body.appendChild(sizeIndicator);
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!isSelecting || !selectionBox) return;
+
+      const currentX = e.clientX;
+      const currentY = e.clientY;
+
+      const x = Math.min(startX, currentX);
+      const y = Math.min(startY, currentY);
+      const width = Math.abs(currentX - startX);
+      const height = Math.abs(currentY - startY);
+
+      selectionBox.style.left = x + 'px';
+      selectionBox.style.top = y + 'px';
+      selectionBox.style.width = width + 'px';
+      selectionBox.style.height = height + 'px';
+
+      // サイズ表示更新
+      if (sizeIndicator) {
+        sizeIndicator.textContent = `${width} × ${height} px`;
+        sizeIndicator.style.left = (x + width / 2 - 50) + 'px';
+        sizeIndicator.style.top = (y - 30) + 'px';
+      }
+    });
+
+    document.addEventListener('mouseup', (e) => {
+      if (!isSelecting || !selectionBox) return;
+
+      const currentX = e.clientX;
+      const currentY = e.clientY;
+
+      const x = Math.min(startX, currentX);
+      const y = Math.min(startY, currentY);
+      const width = Math.abs(currentX - startX);
+      const height = Math.abs(currentY - startY);
+
+      isSelecting = false;
+
+      // 最小サイズチェック
+      if (width < 30 || height < 30) {
+        if (selectionBox) selectionBox.remove();
+        if (sizeIndicator) sizeIndicator.remove();
+        selectionBox = null;
+        sizeIndicator = null;
+        return;
+      }
+
+      // 領域を送信
+      ipcRenderer.send('region-selected', {
+        x: Math.round(x),
+        y: Math.round(y),
+        width: Math.round(width),
+        height: Math.round(height)
+      });
+
+      // クリーンアップ
+      if (selectionBox) selectionBox.remove();
+      if (sizeIndicator) sizeIndicator.remove();
+      selectionBox = null;
+      sizeIndicator = null;
+    });
+
+    // ESCキーでキャンセル
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        ipcRenderer.send('cancel-selection');
+        
+        // クリーンアップ
+        if (selectionBox) selectionBox.remove();
+        if (sizeIndicator) sizeIndicator.remove();
+        selectionBox = null;
+        sizeIndicator = null;
+        isSelecting = false;
+      }
+    });
+  </script>
+</body>
+</html>

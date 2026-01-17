@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      overflow: hidden;
+      background: transparent;
+      width: 100vw;
+      height: 100vh;
+    }
+    .translation-box {
+      position: absolute;
+      background: linear-gradient(135deg, rgba(0, 0, 0, 0.9) 0%, rgba(20, 20, 20, 0.9) 100%);
+      color: #fff;
+      padding: 10px 15px;
+      border-radius: 8px;
+      font-family: 'Segoe UI', 'Yu Gothic', 'Meiryo', sans-serif;
+      font-size: 18px;
+      line-height: 1.5;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.7);
+      border: 2px solid #4CAF50;
+      max-width: 500px;
+      word-wrap: break-word;
+      pointer-events: none;
+      animation: fadeIn 0.3s ease-out;
+      backdrop-filter: blur(5px);
+    }
+    .region-indicator {
+      position: absolute;
+      border: 3px dashed rgba(76, 175, 80, 0.7);
+      background: rgba(76, 175, 80, 0.08);
+      pointer-events: none;
+      box-shadow: 0 0 10px rgba(76, 175, 80, 0.5);
+    }
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(-10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="overlay-container"></div>
+
+  <script>
+    const { ipcRenderer } = require('electron');
+    const container = document.getElementById('overlay-container');
+
+    ipcRenderer.on('update-regions', (event, regions) => {
+      // 既存の領域インジケーターをクリア
+      document.querySelectorAll('.region-indicator').forEach(el => el.remove());
+
+      // 新しい領域を表示
+      regions.forEach(r => {
+        const indicator = document.createElement('div');
+        indicator.className = 'region-indicator';
+        indicator.id = `indicator-${r.id}`;
+        indicator.style.left = r.x + 'px';
+        indicator.style.top = r.y + 'px';
+        indicator.style.width = r.width + 'px';
+        indicator.style.height = r.height + 'px';
+        container.appendChild(indicator);
+      });
+    });
+
+    ipcRenderer.on('update-translation', (event, data) => {
+      let box = document.getElementById(`trans-${data.id}`);
+      
+      if (box) {
+        // 既存のボックスを更新
+        box.textContent = data.text;
+      } else {
+        // 新しいボックスを作成
+        box = document.createElement('div');
+        box.id = `trans-${data.id}`;
+        box.className = 'translation-box';
+        box.style.left = data.x + 'px';
+        box.style.top = (data.y + data.height + 10) + 'px';
+        box.textContent = data.text;
+        container.appendChild(box);
+      }
+    });
+
+    ipcRenderer.on('remove-translation', (event, id) => {
+      const box = document.getElementById(`trans-${id}`);
+      const indicator = document.getElementById(`indicator-${id}`);
+      
+      if (box) box.remove();
+      if (indicator) indicator.remove();
+    });
+  </script>
+</body>
+</html>
