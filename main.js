@@ -19,9 +19,9 @@ const TESSERACT_CORE_RELATIVE_PATH = path.join('node_modules', 'tesseract.js-cor
 
 function getTesseractPaths() {
   const appPath = app && typeof app.getAppPath === 'function' ? app.getAppPath() : __dirname;
-  const workerPath = pathToFileURL(path.join(appPath, TESSERACT_WORKER_RELATIVE_PATH)).href;
-  const corePath = pathToFileURL(path.join(appPath, TESSERACT_CORE_RELATIVE_PATH)).href;
-  const langPath = pathToFileURL(`${appPath}${path.sep}`).href;
+  const workerPath = new URL(pathToFileURL(path.join(appPath, TESSERACT_WORKER_RELATIVE_PATH)).href);
+  const corePath = new URL(pathToFileURL(path.join(appPath, TESSERACT_CORE_RELATIVE_PATH)).href);
+  const langPath = new URL(pathToFileURL(`${appPath}${path.sep}`).href);
 
   return { workerPath, corePath, langPath };
 }
@@ -118,6 +118,15 @@ app.whenReady().then(() => {
 
   globalShortcut.register('CommandOrControl+Shift+R', () => {
     startRegionSelection();
+  });
+
+  globalShortcut.register('CommandOrControl+Shift+Q', () => {
+    console.log('=== 強制終了ショートカット ===');
+    if (captureInterval) {
+      clearInterval(captureInterval);
+      captureInterval = null;
+    }
+    app.exit(0);
   });
 
   console.log('アプリケーション起動完了');
