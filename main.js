@@ -303,14 +303,18 @@ async function performOCR(imageBuffer, region) {
   try {
     console.log(`[OCR] 領域サイズ: ${region.width}x${region.height}px`);
     
+    const baseImage = sharp(imageBuffer).extract({
+      left: region.x,
+      top: region.y,
+      width: region.width,
+      height: region.height
+    });
+    
+    const stats = await baseImage.clone().greyscale().stats();
+    const meanLuma = stats.channels[0].mean;
+    
     // sharpで領域を切り出し + 前処理
-    const croppedBuffer = await sharp(imageBuffer)
-      .extract({
-        left: region.x,
-        top: region.y,
-        width: region.width,
-        height: region.height
-      })
+    let pipeline = baseImage
       // 画像を3倍に拡大（OCR精度向上）
       .resize(region.width * 3, region.height * 3, {
         kernel: 'lanczos3'
@@ -318,7 +322,16 @@ async function performOCR(imageBuffer, region) {
       // グレースケール化
       .greyscale()
       // コントラスト強化
-      .normalize()
+      .normalize();
+
+    // 背景が暗い場合は反転して黒文字/白背景に寄せる
+    if (meanLuma < 128) {
+      pipeline = pipeline.negate();
+    }
+
+    // 二値化で文字エッジを強調
+    const croppedBuffer = await pipeline
+      .threshold(170)
       // シャープネス
       .sharpen()
       .toBuffer();
@@ -332,10 +345,14 @@ async function performOCR(imageBuffer, region) {
         psm: 6,
         // OCRエンジンモード: LSTM
         oem: 1,
-        // 言語データのパス（自動ダウンロード）
-        langPath: 'https://tessdata.projectnaptha.com/4.0.0_fast',
+        // 言語データのパス（ローカル優先）
+        langPath: path.join(__dirname),
         // キャッシュを有効化
-        cachePath: './.cache'
+        cachePath: './.cache',
+        // DPIを明示して精度を安定化
+        user_defined_dpi: '300',
+        // 空白保持
+        preserve_interword_spaces: '1'
       }
     );
     
