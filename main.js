@@ -14,6 +14,17 @@ let previousTexts = {};
 let isCapturing = false;
 let captureInterval = null;
 let isProcessing = false; // 処理中フラグ
+const TESSERACT_WORKER_RELATIVE_PATH = path.join('node_modules', 'tesseract.js', 'dist', 'worker.min.js');
+const TESSERACT_CORE_RELATIVE_PATH = path.join('node_modules', 'tesseract.js-core', 'tesseract-core.wasm.js');
+
+function getTesseractPaths() {
+  const appPath = app && typeof app.getAppPath === 'function' ? app.getAppPath() : __dirname;
+  const workerPath = pathToFileURL(path.join(appPath, TESSERACT_WORKER_RELATIVE_PATH)).href;
+  const corePath = pathToFileURL(path.join(appPath, TESSERACT_CORE_RELATIVE_PATH)).href;
+  const langPath = pathToFileURL(`${appPath}${path.sep}`).href;
+
+  return { workerPath, corePath, langPath };
+}
 
 function createMainWindow() {
   mainWindow = new BrowserWindow({
@@ -336,6 +347,8 @@ async function performOCR(imageBuffer, region) {
       // シャープネス
       .sharpen()
       .toBuffer();
+
+    const { workerPath, corePath, langPath } = getTesseractPaths();
     
     // OCR実行（英語のみで読み取り）
     const { data: { text } } = await Tesseract.recognize(
@@ -347,7 +360,10 @@ async function performOCR(imageBuffer, region) {
         // OCRエンジンモード: LSTM
         oem: 1,
         // 言語データのパス（ローカル優先）
-        langPath: pathToFileURL(`${__dirname}${path.sep}`).href,
+        langPath,
+        // ローカルのTesseractワーカー/コアを明示
+        workerPath,
+        corePath,
         // キャッシュを有効化
         cachePath: './.cache',
         // DPIを明示して精度を安定化
